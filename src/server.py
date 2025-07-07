@@ -1,39 +1,66 @@
-from flask import Flask, send_file
-import random
 import os
-from PIL import Image
+import random
+import logging
+from io import BytesIO
+from flask import Flask, send_file, abort, current_app
+from PIL import Image, UnidentifiedImageError
 
 app = Flask(__name__)
 
-# Folder with your images (jpg/png)
-IMAGE_FOLDER = "/Users/sunny/prv/github/Image-Server/photos"
+# Configuration
+class Config:
+    BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    IMAGE_FOLDER = os.getenv("IMAGE_FOLDER", os.path.join(BASE_DIR, "photos"))
+    MAX_WIDTH = int(os.getenv("MAX_WIDTH", 1200))
+    MAX_HEIGHT = int(os.getenv("MAX_HEIGHT", 825))
 
-PROCESSED_IMAGE = '/Users/sunny/prv/github/Image-Server/processed/image.jpg'
-MAX_WIDTH = 1200
-MAX_HEIGHT = 825
+app.config.from_object(Config)
 
-def resize_image(input_path, output_path):
-    with Image.open(input_path) as img:
-        img.thumbnail((MAX_WIDTH, MAX_HEIGHT), Image.Resampling.LANCZOS)
-        # DO NOT convert to grayscale
-        img = img.convert('RGB')  # Ensure compatible 3-channel JPEG
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-        # Save as baseline JPEG
-        img.save(output_path, format='JPEG', quality=85, optimize=True, progressive=False)
-    print(f"Processed image saved to {output_path}")
+def resize_image_to_bytes(input_path):
+    try:
+        with Image.open(input_path) as img:
+            img.thumbnail((app.config['MAX_WIDTH'], app.config['MAX_HEIGHT']), Image.Resampling.LANCZOS)
+            img = img.convert('RGB')
+
+            buf = BytesIO()
+            img.save(buf, format='JPEG', quality=85, optimize=True, progressive=False)
+            buf.seek(0)
+            return buf
+    except UnidentifiedImageError:
+        logger.error(f"Cannot identify image file: {input_path}")
+        return None
+    except Exception as e:
+        logger.error(f"Error processing image {input_path}: {e}")
+        return None
 
 @app.route("/image.jpg")
 def random_image():
-    images = [f for f in os.listdir(IMAGE_FOLDER) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    if not os.path.isdir(app.config['IMAGE_FOLDER']):
+        logger.error(f"Image folder does not exist: {app.config['IMAGE_FOLDER']}")
+        abort(500, description="Server configuration error")
+
+    images = [f for f in os.listdir(app.config['IMAGE_FOLDER'])
+              if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+
     if not images:
-        return "No images found", 404
+        logger.warning("No images found in folder")
+        abort(404, description="No images found")
 
     chosen_image = random.choice(images)
-    image_path = os.path.join(IMAGE_FOLDER, chosen_image)
-    resize_image(image_path, PROCESSED_IMAGE)
+    image_path = os.path.join(app.config['IMAGE_FOLDER'], chosen_image)
 
-    return send_file(PROCESSED_IMAGE, mimetype='image/jpeg')
+    image_bytes = resize_image_to_bytes(image_path)
+    if not image_bytes:
+        abort(500, description="Failed to process image")
 
+    logger.info(f"Serving image: {chosen_image}")
+    return send_file(image_bytes, mimetype='image/jpeg')
 
 if __name__ == "__main__":
-    app.run(host='192.168.1.179', port=8000)
+    # Only for development/testing. Use Gunicorn in production:
+    # gunicorn -b 0.0.0.0:8000 src.server:app
+    app.run(host='0.0.0.0', port=8000)

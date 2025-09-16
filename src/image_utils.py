@@ -14,11 +14,19 @@ def resize_image_to_bytes(input_path):
             enhancer = ImageEnhance.Contrast(img)
             img = enhancer.enhance(1.3)  # Increase contrast by 30%
 
-            # Resize to exact dimensions (this will stretch/distort if aspect ratios don't match)
-            canvas = img.resize(
+            # Resize to fit within the target dimensions while preserving aspect ratio
+            img.thumbnail(
                 (current_app.config['MAX_WIDTH'], current_app.config['MAX_HEIGHT']),
                 Image.Resampling.LANCZOS
             )
+
+            # Create a white canvas of exact dimensions
+            canvas = Image.new('L', (current_app.config['MAX_WIDTH'], current_app.config['MAX_HEIGHT']), 255)
+
+            # Center the image on the canvas
+            x_offset = (current_app.config['MAX_WIDTH'] - img.width) // 2
+            y_offset = (current_app.config['MAX_HEIGHT'] - img.height) // 2
+            canvas.paste(img, (x_offset, y_offset))
 
             # Convert back to RGB for JPEG output (but maintain grayscale appearance)
             canvas = canvas.convert('RGB')
